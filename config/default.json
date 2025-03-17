@@ -1,0 +1,75 @@
+{
+  "system": {
+    "name": "智能照片备份系统",
+    "version": "0.1.0",
+    "environment": "development"
+  },
+  "server": {
+    "port": 3000,
+    "host": "localhost",
+    "apiPrefix": "/api"
+  },
+  "database": {
+    "type": "mongodb",
+    "url": "mongodb://localhost:27017/photo-backup",
+    "options": {
+      "useNewUrlParser": true,
+      "useUnifiedTopology": true
+    }
+  },
+  "storage": {
+    "type": "local",
+    "basePath": "./storage",
+    "thumbnailPath": "./storage/thumbnails",
+    "maxUploadSize": 10485760
+  },
+  "thumbnails": {
+    "width": 300,
+    "height": 300,
+    "quality": 80,
+    "format": "jpeg"
+  },
+  "ai": {
+    "local": {
+      "enabled": true,
+      "modelPath": "./models/local",
+      "maxSize": 4294967296,
+      "threshold": 0.6
+    },
+    "remote": {
+      "enabled": true,
+      "url": "https://api.example.com/ai",
+      "apiKey": "YOUR_API_KEY",
+      "timeout": 5000
+    }
+  },
+  "security": {
+    "jwt": {
+      "secret": "CHANGE_THIS_SECRET_IN_PRODUCTION",
+      "expiresIn": "1d"
+    },
+    "bcrypt": {
+      "saltRounds": 10
+    },
+    "cors": {
+      "origin": "*",
+      "methods": ["GET", "POST", "PUT", "DELETE"]
+    }
+  },
+  "logging": {
+    "level": "info",
+    "format": "combined",
+    "file": "./logs/app.log"
+  },
+  "features": {
+    "phase1": {
+      "enabled": true
+    },
+    "phase2": {
+      "enabled": false
+    },
+    "phase3": {
+      "enabled": false
+    }
+  }
+}
