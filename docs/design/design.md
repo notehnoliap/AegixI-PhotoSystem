@@ -145,74 +145,122 @@
 
 **模型切换机制设计**：
 
-1. **切换流程图**:
+1. **异步AI处理流程图**:
+
 ```
-+-------------------+     +----------------------+     +---------------------+
-| 照片上传到AI服务  |---->| 本地模型处理         |---->| 评估本地处理结果    |
-+-------------------+     +----------------------+     +---------------------+
-                                                               |
-                                                               | 判断结果质量
-                                                               v
-                                                      +---------------------+
-                                                      | 结果是否满足阈值?   |
-                                                      +---------------------+
-                                                        /               \
-                                                       /                 \
-                                                 是   /                   \  否
-                                                     /                     \
-                              +---------------------+                       +----------------------+
-                              | 使用本地结果       |                       | 调用远程模型处理     |
-                              +---------------------+                       +----------------------+
-                                        |                                            |
-                                        |                                            |
-                                        v                                            v
-                                +---------------------+                    +----------------------+
-                                | 记录统计信息        |                    | 合并远程与本地结果   |
-                                +---------------------+                    +----------------------+
-                                        |                                            |
-                                        |                                            |
-                                        v                                            v
-                                +---------------------+                    +----------------------+
-                                | 返回结果给照片服务  |<-------------------| 记录切换统计信息     |
-                                +---------------------+                    +----------------------+
+                                +---------------------+
+                                | 照片上传到系统      |
+                                +---------------------+
+                                          |
+                                          v
+                                +---------------------+
+                                | 预处理照片          |
+                                +---------------------+
+                                          |
+                                          v
+                                +---------------------+
+                                | 使用本地模型处理    |
+                                +---------------------+
+                                          |
+                                          +-----------------------------+
+                                          |                            |
+                                          v                            v
+                            +---------------------+       +----------------------+
+                            | 立即返回本地结果    |       | 创建远程处理后台任务 |
+                            +---------------------+       +----------------------+
+                                      |                              |
+                                      v                              v
+                            +---------------------+       +----------------------+
+                            | 记录统计信息        |       | 提交到处理队列       |
+                            +---------------------+       +----------------------+
+                                      |                              |
+                                      v                              v
+                                                          +----------------------+
+                                                          | 远程模型处理完成     |
+                                                          +----------------------+
+                                                                     |
+                                                                     v
+                                                          +----------------------+
+                                                          | 评估远程结果与本地差异|
+                                                          +----------------------+
+                                                                     |
+                                                                     v
+                                                          +----------------------+
+                                                          | 更新照片分析结果     |
+                                                          +----------------------+
+                                                                     |
+                                                                     v
+                                                          +----------------------+
+                                                          | 发送结果更新通知     |
+                                                          +----------------------+
 ```
 
-2. **核心切换逻辑伪代码**:
+2. **异步处理逻辑伪代码**:
 ```
 function processImage(image):
-    // 首先使用本地模型处理
+    // 使用本地模型立即处理
     localResult = localModelProcessor.process(image)
     
-    // 评估本地结果质量
-    resultQuality = resultEvaluator.evaluate(localResult)
-    
     // 记录统计信息
-    statistics.recordLocalProcessing(image.id, resultQuality)
+    statistics.recordLocalProcessing(image.id, localResult)
     
-    // 判断是否需要切换到远程模型
-    if resultQuality.confidence < CONFIDENCE_THRESHOLD || 
-       resultQuality.descriptionQuality < DESCRIPTION_QUALITY_THRESHOLD ||
-       localResult.tags.length < MIN_TAGS_THRESHOLD:
+    // 立即将本地结果返回给用户
+    saveAndReturnResult(image.id, localResult, "local")
+    
+    // 创建后台任务处理远程分析
+    backgroundTaskQueue.enqueue({
+        taskType: "remoteImageProcessing",
+        imageId: image.id,
+        priority: calculatePriority(localResult),
+        timestamp: Date.now()
+    })
+    
+    return localResult
+
+async function processImageRemote(task):
+    try {
+        // 获取图像数据
+        image = await imageRepository.findById(task.imageId)
         
-        // 使用远程模型进行处理
-        remoteResult = remoteModelProcessor.process(image)
+        // 获取本地处理结果（已保存）
+        localResult = await resultRepository.findByImageId(task.imageId, "local")
+        
+        // 使用远程模型处理
+        remoteResult = await remoteModelProcessor.process(image)
         
         // 记录远程处理统计信息
-        statistics.recordRemoteProcessing(image.id, remoteResult)
+        statistics.recordRemoteProcessing(task.imageId, remoteResult)
         
-        // 合并结果
-        finalResult = mergeResults(localResult, remoteResult)
+        // 分析结果差异
+        resultDifference = analyzeResultDifference(localResult, remoteResult)
         
-        // 记录模型切换事件
-        statistics.recordModelSwitch(image.id, "local_to_remote", 
-                                    resultQuality, remoteResult.quality)
+        // 保存远程结果
+        await resultRepository.save({
+            imageId: task.imageId,
+            result: remoteResult,
+            source: "remote",
+            timestamp: Date.now()
+        })
         
-        return finalResult
-    else:
-        // 本地结果满足要求，直接使用
-        return localResult
+        // 创建合并结果
+        mergedResult = createMergedResult(localResult, remoteResult)
+        
+        // 更新照片元数据和标签
+        await updatePhotoMetadata(task.imageId, mergedResult)
+        
+        // 发送结果更新通知
+        notificationService.notifyResultUpdate(task.imageId, {
+            hasDifference: resultDifference.significant,
+            improvementLevel: resultDifference.improvementLevel,
+            newTags: resultDifference.newTags
+        })
+    } catch (error) {
+        // 记录错误并降级到仅使用本地结果
+        logger.error(`Remote processing failed for image ${task.imageId}`, error)
+        statistics.recordRemoteProcessingFailure(task.imageId, error)
+    }
 
-function mergeResults(localResult, remoteResult):
+function createMergedResult(localResult, remoteResult):
     // 创建合并结果对象
     mergedResult = new AnalysisResult()
     
@@ -234,7 +282,7 @@ function mergeResults(localResult, remoteResult):
     }
     
     // 记录结果来源
-    mergedResult.source = "hybrid"
+    mergedResult.source = "merged"
     mergedResult.confidence = Math.max(localResult.confidence, remoteResult.confidence)
     
     return mergedResult
@@ -244,11 +292,14 @@ function mergeResults(localResult, remoteResult):
 
 | 参数名 | 描述 | 默认值 | 可配置范围 |
 |-------|------|-------|-----------|
-| CONFIDENCE_THRESHOLD | 本地模型结果可信度阈值 | 0.75 | 0.5-0.95 |
-| DESCRIPTION_QUALITY_THRESHOLD | 描述质量阈值 | 0.7 | 0.5-0.9 |
-| MIN_TAGS_THRESHOLD | 最小标签数量 | 3 | 1-10 |
-| REMOTE_TIMEOUT | 远程模型调用超时(毫秒) | 5000 | 1000-10000 |
-| MODEL_SWITCH_MODE | 切换模式 | "auto" | "auto", "local_only", "remote_only", "hybrid_always" |
+| REMOTE_PROCESSING_ENABLED | 是否启用远程处理 | true | true/false |
+| REMOTE_PROCESSING_DELAY | 远程处理延迟时间(毫秒) | 0 | 0-10000 |
+| REMOTE_TIMEOUT | 远程模型调用超时(毫秒) | 5000 | 1000-30000 |
+| REMOTE_PRIORITY_THRESHOLD | 低置信度优先处理阈值 | 0.6 | 0.4-0.9 |
+| NOTIFY_ON_RESULT_UPDATE | 结果更新时是否通知用户 | true | true/false |
+| SIGNIFICANT_DIFFERENCE_THRESHOLD | 显著差异阈值 | 0.2 | 0.1-0.5 |
+| BACKGROUND_QUEUE_SIZE | 后台处理队列大小 | 1000 | 100-10000 |
+| RESULT_RETENTION_PERIOD | 结果保留天数 | 30 | 1-365 |
 
 4. **关键接口设计**:
 
@@ -261,39 +312,93 @@ interface AnalysisResult {
     description: string;
     confidence: number;
     metadata: Record<string, any>;
-    source: "local" | "remote" | "hybrid";
+    source: "local" | "remote" | "merged";
     processingTime: number;
     timestamp: Date;
+    remoteProcessingStatus?: "pending" | "completed" | "failed";
+    remoteProcessingId?: string;
+}
+
+// 结果差异接口
+interface ResultDifference {
+    significant: boolean;
+    improvementLevel: "none" | "minor" | "significant";
+    confidenceDifference: number;
+    newTags: string[];
+    removedTags: string[];
+    descriptionDifference: number;
+}
+
+// 结果更新通知接口
+interface ResultUpdateNotification {
+    imageId: string;
+    hasDifference: boolean;
+    improvementLevel: "none" | "minor" | "significant";
+    newTags: string[];
+    timestamp: Date;
+}
+
+// 后台任务接口
+interface BackgroundTask {
+    id: string;
+    taskType: "remoteImageProcessing";
+    imageId: string;
+    priority: number;
+    status: "queued" | "processing" | "completed" | "failed";
+    createdAt: Date;
+    updatedAt: Date;
+    error?: string;
 }
 
 // AI服务接口
 interface AIService {
-    // 分析照片并返回结果
+    // 使用本地模型分析照片并立即返回结果，同时创建后台任务
     analyzePhoto(photoId: string, options?: AnalysisOptions): Promise<AnalysisResult>;
     
-    // 获取模型切换统计信息
-    getSwitchingStatistics(timeRange?: {start: Date, end: Date}): Promise<SwitchingStatistics>;
+    // 获取照片的所有分析结果（本地、远程、合并）
+    getPhotoAnalysisResults(photoId: string): Promise<{
+        local?: AnalysisResult;
+        remote?: AnalysisResult;
+        merged?: AnalysisResult;
+    }>;
     
-    // 配置模型切换参数
-    configureModelSwitching(params: ModelSwitchingConfig): void;
+    // 订阅结果更新通知
+    subscribeToResultUpdates(callback: (notification: ResultUpdateNotification) => void): Subscription;
+    
+    // 手动触发或重新触发远程分析
+    requestRemoteAnalysis(photoId: string, priority?: number): Promise<BackgroundTask>;
+    
+    // 获取后台任务状态
+    getBackgroundTaskStatus(taskId: string): Promise<BackgroundTask>;
+    
+    // 配置异步处理参数
+    configureAsyncProcessing(params: AsyncProcessingConfig): void;
+    
+    // 获取处理统计信息
+    getProcessingStatistics(timeRange?: {start: Date, end: Date}): Promise<ProcessingStatistics>;
     
     // 获取当前配置
-    getCurrentConfiguration(): ModelSwitchingConfig;
+    getCurrentConfiguration(): AsyncProcessingConfig;
     
-    // 手动触发远程模型重新分析
-    requestRemoteAnalysis(photoId: string): Promise<AnalysisResult>;
+    // 选择首选结果版本（本地/远程/合并）
+    selectPreferredResult(photoId: string, source: "local" | "remote" | "merged"): Promise<void>;
 }
 ```
 
 5. **实现考虑**:
 
-- **性能优化**：本地模型使用轻量级架构(如MobileNetV2)，确保快速响应
-- **异步处理**：远程模型处理采用异步方式，不阻塞主流程
-- **缓存机制**：为常见照片类型的分析结果建立缓存，减少重复处理
-- **降级策略**：远程服务不可用时自动降级到仅使用本地模型
-- **详细日志**：记录每次模型切换事件，包括决策原因、时间和结果对比
-- **可视化界面**：为管理员提供模型切换统计和趋势可视化
-- **A/B测试支持**：支持不同切换策略的A/B测试，优化切换算法
+- **用户体验优化**：本地模型使用轻量级架构(如MobileNetV2)，确保即时响应不超过500ms
+- **后台任务管理**：使用可靠的消息队列(如RabbitMQ或Redis队列)管理异步处理任务
+- **优先级调度**：实现基于多因素的任务优先级算法，优先处理重要照片
+- **事件驱动架构**：使用事件总线或WebSocket实现结果更新通知机制
+- **增量更新**：远程结果仅更新变更部分，减少数据传输和存储开销
+- **用户通知策略**：根据结果差异程度和用户设置决定是否发送通知
+- **冲突解决**：提供用户友好的界面显示本地和远程结果差异，允许用户选择
+- **批量处理优化**：对多张照片的后台处理进行批处理优化，提高吞吐量
+- **处理状态可视化**：在UI中显示后台处理状态和进度指示器
+- **故障恢复**：实现任务重试机制，确保暂时性故障不会导致任务丢失
+- **监控与告警**：对后台处理队列长度和处理时间进行监控，超阈值时发出告警
+- **结果版本控制**：保留本地和远程两种结果版本，支持用户在两者间切换
 
 6. **关键指标监控**:
 
