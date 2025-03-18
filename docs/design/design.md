@@ -145,7 +145,7 @@
 
 **模型切换机制设计**：
 
-1. **异步AI处理流程图**:
+1. **条件异步AI处理流程图**:
 
 ```
                                 +---------------------+
@@ -162,41 +162,60 @@
                                 | 使用本地模型处理    |
                                 +---------------------+
                                           |
-                                          +-----------------------------+
-                                          |                            |
-                                          v                            v
-                            +---------------------+       +----------------------+
-                            | 立即返回本地结果    |       | 创建远程处理后台任务 |
-                            +---------------------+       +----------------------+
-                                      |                              |
-                                      v                              v
-                            +---------------------+       +----------------------+
-                            | 记录统计信息        |       | 提交到处理队列       |
-                            +---------------------+       +----------------------+
-                                      |                              |
-                                      v                              v
-                                                          +----------------------+
-                                                          | 远程模型处理完成     |
-                                                          +----------------------+
-                                                                     |
-                                                                     v
-                                                          +----------------------+
-                                                          | 评估远程结果与本地差异|
-                                                          +----------------------+
-                                                                     |
-                                                                     v
-                                                          +----------------------+
-                                                          | 更新照片分析结果     |
-                                                          +----------------------+
-                                                                     |
-                                                                     v
-                                                          +----------------------+
-                                                          | 发送结果更新通知     |
-                                                          +----------------------+
+                                          v
+                                +---------------------+
+                                | 立即返回本地结果    |
+                                +---------------------+
+                                          |
+                                          v
+                                +---------------------+
+                                | 评估本地结果质量    |
+                                +---------------------+
+                                          |
+                                          v
+                              +-----------+------------+
+                              |                        |
+                        是    | 本地结果质量是否达标?  |    否
+                              |                        |
+                              +-----------+------------+
+                                          |                          |
+                                          |                          v
+                                          |             +----------------------+
+                                          |             | 创建远程处理后台任务 |
+                                          |             +----------------------+
+                                          |                         |
+                                          |                         v
+                                          |             +----------------------+
+                                          |             | 提交到处理队列       |
+                                          |             +----------------------+
+                                          |                         |
+                                          |                         v
+                                          |             +----------------------+
+                                          |             | 远程模型处理完成     |
+                                          |             +----------------------+
+                                          |                         |
+                                          |                         v
+                                          |             +----------------------+
+                                          |             | 合并本地与远程结果   |
+                                          |             +----------------------+
+                                          |                         |
+                                          |                         v
+                                          |             +----------------------+
+                                          |             | 更新照片分析结果     |
+                                          |             +----------------------+
+                                          |                         |
+                                          |                         v
+                                          |             +----------------------+
+                                          |             | 发送结果更新通知     |
+                                          v             +----------------------+
+                                +---------------------+
+                                | 记录统计信息        |
+                                +---------------------+
 ```
 
-2. **异步处理逻辑伪代码**:
+2. **条件异步处理逻辑伪代码**:
 ```
+// 主处理函数（同步部分）
 function processImage(image):
     // 使用本地模型立即处理
     localResult = localModelProcessor.process(image)
@@ -207,15 +226,75 @@ function processImage(image):
     // 立即将本地结果返回给用户
     saveAndReturnResult(image.id, localResult, "local")
     
-    // 创建后台任务处理远程分析
-    backgroundTaskQueue.enqueue({
-        taskType: "remoteImageProcessing",
-        imageId: image.id,
-        priority: calculatePriority(localResult),
-        timestamp: Date.now()
-    })
+    // 评估本地结果质量
+    qualityEvaluation = evaluateResultQuality(localResult)
+    
+    // 记录质量评估结果
+    statistics.recordQualityEvaluation(image.id, qualityEvaluation)
+    
+    // 只有当质量评估不通过时，才创建远程处理任务
+    if (!qualityEvaluation.meetsCriteria) {
+        backgroundTaskQueue.enqueue({
+            taskType: "remoteImageProcessing",
+            imageId: image.id,
+            priority: calculatePriority(localResult, qualityEvaluation),
+            reason: qualityEvaluation.failureReason,
+            timestamp: Date.now()
+        })
+        
+        // 记录远程处理决策
+        statistics.recordRemoteProcessingDecision(
+            image.id, 
+            "triggered", 
+            qualityEvaluation.failureReason
+        )
+    } else {
+        // 记录无需远程处理的决策
+        statistics.recordRemoteProcessingDecision(
+            image.id, 
+            "skipped", 
+            "local_result_meets_criteria"
+        )
+    }
     
     return localResult
+
+// 结果质量评估函数
+function evaluateResultQuality(result):
+    let evaluation = {
+        meetsCriteria: true,
+        failureReason: null,
+        confidenceScore: result.confidence,
+        tagsCount: result.tags.length,
+        descriptionQuality: assessDescriptionQuality(result.description)
+    }
+    
+    // 检查置信度
+    if (result.confidence < CONFIDENCE_THRESHOLD) {
+        evaluation.meetsCriteria = false
+        evaluation.failureReason = "low_confidence"
+    }
+    
+    // 检查标签数量
+    else if (result.tags.length < MIN_TAGS_THRESHOLD) {
+        evaluation.meetsCriteria = false
+        evaluation.failureReason = "insufficient_tags"
+    }
+    
+    // 检查描述质量
+    else if (evaluation.descriptionQuality < DESCRIPTION_QUALITY_THRESHOLD) {
+        evaluation.meetsCriteria = false
+        evaluation.failureReason = "poor_description"
+    }
+    
+    // 检查图像模糊度（如果有）
+    else if (result.metadata.blurScore && 
+             result.metadata.blurScore > MAX_BLUR_THRESHOLD) {
+        evaluation.meetsCriteria = false
+        evaluation.failureReason = "image_too_blurry"
+    }
+    
+    return evaluation
 
 async function processImageRemote(task):
     try {
@@ -292,10 +371,13 @@ function createMergedResult(localResult, remoteResult):
 
 | 参数名 | 描述 | 默认值 | 可配置范围 |
 |-------|------|-------|-----------|
+| CONFIDENCE_THRESHOLD | 本地模型结果可信度阈值 | 0.75 | 0.5-0.95 |
+| DESCRIPTION_QUALITY_THRESHOLD | 描述质量最低阈值 | 0.7 | 0.5-0.9 |
+| MIN_TAGS_THRESHOLD | 最小标签数量要求 | 3 | 1-10 |
+| MAX_BLUR_THRESHOLD | 最大允许模糊度评分 | 0.4 | 0.2-0.8 |
 | REMOTE_PROCESSING_ENABLED | 是否启用远程处理 | true | true/false |
-| REMOTE_PROCESSING_DELAY | 远程处理延迟时间(毫秒) | 0 | 0-10000 |
 | REMOTE_TIMEOUT | 远程模型调用超时(毫秒) | 5000 | 1000-30000 |
-| REMOTE_PRIORITY_THRESHOLD | 低置信度优先处理阈值 | 0.6 | 0.4-0.9 |
+| QUALITY_CHECK_ENABLED | 是否启用质量检查 | true | true/false |
 | NOTIFY_ON_RESULT_UPDATE | 结果更新时是否通知用户 | true | true/false |
 | SIGNIFICANT_DIFFERENCE_THRESHOLD | 显著差异阈值 | 0.2 | 0.1-0.5 |
 | BACKGROUND_QUEUE_SIZE | 后台处理队列大小 | 1000 | 100-10000 |
@@ -350,9 +432,29 @@ interface BackgroundTask {
     error?: string;
 }
 
+// 质量评估结果接口
+interface QualityEvaluationResult {
+    meetsCriteria: boolean;
+    failureReason: string | null;
+    confidenceScore: number;
+    tagsCount: number;
+    descriptionQuality: number;
+    blurScore?: number;
+    additionalMetrics?: Record<string, number>;
+}
+
+// 质量评估配置接口
+interface QualityEvaluationConfig {
+    confidenceThreshold: number;
+    descriptionQualityThreshold: number;
+    minTagsThreshold: number;
+    maxBlurThreshold: number;
+    customEvaluators?: Function[];
+}
+
 // AI服务接口
 interface AIService {
-    // 使用本地模型分析照片并立即返回结果，同时创建后台任务
+    // 使用本地模型分析照片并立即返回结果，根据质量评估决定是否创建后台任务
     analyzePhoto(photoId: string, options?: AnalysisOptions): Promise<AnalysisResult>;
     
     // 获取照片的所有分析结果（本地、远程、合并）
@@ -362,23 +464,35 @@ interface AIService {
         merged?: AnalysisResult;
     }>;
     
+    // 获取照片的质量评估结果
+    getQualityEvaluation(photoId: string): Promise<QualityEvaluationResult>;
+    
     // 订阅结果更新通知
     subscribeToResultUpdates(callback: (notification: ResultUpdateNotification) => void): Subscription;
     
-    // 手动触发或重新触发远程分析
-    requestRemoteAnalysis(photoId: string, priority?: number): Promise<BackgroundTask>;
+    // 手动触发远程分析，无论质量评估结果如何
+    forceRemoteAnalysis(photoId: string, priority?: number): Promise<BackgroundTask>;
     
     // 获取后台任务状态
     getBackgroundTaskStatus(taskId: string): Promise<BackgroundTask>;
     
-    // 配置异步处理参数
-    configureAsyncProcessing(params: AsyncProcessingConfig): void;
+    // 配置质量评估参数
+    configureQualityEvaluation(config: QualityEvaluationConfig): void;
+    
+    // 配置远程处理参数
+    configureRemoteProcessing(config: RemoteProcessingConfig): void;
     
     // 获取处理统计信息
     getProcessingStatistics(timeRange?: {start: Date, end: Date}): Promise<ProcessingStatistics>;
     
+    // 获取质量评估统计信息
+    getQualityEvaluationStatistics(timeRange?: {start: Date, end: Date}): Promise<QualityEvaluationStatistics>;
+    
     // 获取当前配置
-    getCurrentConfiguration(): AsyncProcessingConfig;
+    getCurrentConfiguration(): {
+        qualityEvaluation: QualityEvaluationConfig;
+        remoteProcessing: RemoteProcessingConfig;
+    };
     
     // 选择首选结果版本（本地/远程/合并）
     selectPreferredResult(photoId: string, source: "local" | "remote" | "merged"): Promise<void>;
@@ -388,17 +502,31 @@ interface AIService {
 5. **实现考虑**:
 
 - **用户体验优化**：本地模型使用轻量级架构(如MobileNetV2)，确保即时响应不超过500ms
+- **质量评估算法**：
+  * 使用多维度评估标准，包括置信度、描述完整性、标签数量和图像清晰度
+  * 质量评估过程轻量化设计，不影响本地模型的响应时间
+  * 支持可插拔的自定义评估器，以适应不同类型照片的特殊需求
+  * 实现特定场景的专用评估器（如人像、风景、文档等）
+- **决策透明度**：
+  * 记录每个远程处理决策的详细原因和评估指标
+  * 提供用户可访问的决策日志，解释为何某些照片需要远程处理
+  * 在用户界面中用视觉指示器展示正在远程处理的照片及原因
+  * 提供管理员控制台查看全局质量评估统计和远程处理触发模式
 - **后台任务管理**：使用可靠的消息队列(如RabbitMQ或Redis队列)管理异步处理任务
-- **优先级调度**：实现基于多因素的任务优先级算法，优先处理重要照片
+- **优先级智能调度**：
+  * 根据质量评估失败原因动态调整处理优先级
+  * 置信度极低的照片获得更高处理优先级
+  * 用户明确请求的远程分析获得最高优先级
+  * 实现基于资源利用率的动态调度策略
 - **事件驱动架构**：使用事件总线或WebSocket实现结果更新通知机制
 - **增量更新**：远程结果仅更新变更部分，减少数据传输和存储开销
-- **用户通知策略**：根据结果差异程度和用户设置决定是否发送通知
+- **智能通知**：只在远程结果显著改善照片分析质量时才通知用户
 - **冲突解决**：提供用户友好的界面显示本地和远程结果差异，允许用户选择
-- **批量处理优化**：对多张照片的后台处理进行批处理优化，提高吞吐量
+- **批量处理策略**：对大量照片进行智能分组，优先处理可能需要远程分析的照片
 - **处理状态可视化**：在UI中显示后台处理状态和进度指示器
 - **故障恢复**：实现任务重试机制，确保暂时性故障不会导致任务丢失
-- **监控与告警**：对后台处理队列长度和处理时间进行监控，超阈值时发出告警
-- **结果版本控制**：保留本地和远程两种结果版本，支持用户在两者间切换
+- **资源优化**：通过减少不必要的远程处理，显著降低系统资源消耗和运营成本
+- **结果版本控制**：保留所有结果版本，支持用户在不同版本间比较和选择
 
 6. **关键指标监控**:
 
