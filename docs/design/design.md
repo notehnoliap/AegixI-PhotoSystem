@@ -539,45 +539,481 @@ interface AIService {
 #### 2.1.4 代理服务
 
 **职责**：
-- AI代理管理
-- 用户行为学习
-- 代理间通信
+- AI代理管理：创建、配置和监控用户专属AI代理
+- 用户行为学习：分析用户行为模式，调整代理行为
+- 代理间通信：支持不同用户代理之间的安全通信
+- 个性化推荐：基于用户偏好和行为提供照片管理建议
 
 **主要类**：
 ```
 - AgentService: 代理管理的核心服务
-- AgentFactory: 代理创建工厂
+  - 创建和初始化用户代理
+  - 管理代理生命周期
+  - 处理代理状态同步
+  
 - BehaviorLearningService: 行为学习服务
+  - 收集和分析用户交互数据
+  - 构建用户行为模型
+  - 适应代理行为以匹配用户偏好
+  
 - CommunicationService: 代理间通信服务
+  - 实现代理之间的加密通信
+  - 管理通信权限和访问控制
+  - 处理分布式代理协作
+  
+- PreferenceManagerService: 偏好管理服务
+  - 存储和更新用户偏好设置
+  - 提供偏好查询接口
+  - 实现偏好冲突解决
+  
 - AgentRepository: 代理数据访问层
+  - 存取代理状态和配置
+  - 管理代理持久化数据
+  
 - AgentController: 代理API控制器
+  - 处理代理相关的HTTP请求
+  - 实现代理API端点
+  - 处理授权和权限验证
 ```
 
 **关键算法**：
-- 用户行为模式识别
-- 代理状态管理
-- 安全通信协议
+- 用户行为模式识别：使用机器学习识别用户照片管理习惯
+- 代理状态管理：维护代理状态机，确保状态一致性
+- 个性化推荐算法：基于用户历史行为生成个性化建议
+- 安全通信协议：实现代理间的加密和认证通信
+- 协作决策算法：多代理协作决策时的共识机制
+
+**API接口设计**：
+
+1. **获取用户代理 (GET /api/agents/:userId)**
+   - 请求参数：
+     - `userId` (路径参数): 用户ID
+   - 响应格式：
+   ```json
+   {
+     "agentId": "string",
+     "userId": "string",
+     "status": "active | learning | inactive",
+     "createdAt": "datetime",
+     "lastActivity": "datetime",
+     "learningProgress": "number",
+     "preferences": {
+       "notificationLevel": "high | medium | low",
+       "learningMode": "active | passive",
+       "privacySettings": {}
+     },
+     "capabilities": ["string"]
+   }
+   ```
+   - 状态码：
+     - 200: 成功
+     - 404: 用户代理未找到
+     - 403: 无权访问该用户代理
+
+2. **向代理发送查询 (POST /api/agents/:userId/query)**
+   - 请求参数：
+     - `userId` (路径参数): 用户ID
+   - 请求体：
+   ```json
+   {
+     "query": "string",
+     "context": {
+       "location": "string", 
+       "timestamp": "datetime",
+       "recentQueries": ["string"]
+     },
+     "preferences": {
+       "detailLevel": "brief | detailed",
+       "responseFormat": "text | json"
+     }
+   }
+   ```
+   - 响应格式：
+   ```json
+   {
+     "queryId": "string",
+     "response": "string",
+     "matchedPhotos": [
+       {
+         "photoId": "string",
+         "confidence": "number",
+         "matchReason": "string"
+       }
+     ],
+     "followUpSuggestions": ["string"],
+     "processingTime": "number",
+     "agentInsights": {}
+   }
+   ```
+   - 状态码：
+     - 200: 成功
+     - 404: 用户代理未找到
+     - 400: 无效查询
+     - 403: 无权访问该用户代理
+
+3. **代理间通信 (POST /api/agents/:userId/communicate)**
+   - 请求参数：
+     - `userId` (路径参数): 发起通信的用户ID
+   - 请求体：
+   ```json
+   {
+     "targetAgentId": "string",
+     "messageType": "query | share | collaborate",
+     "content": "string",
+     "resources": [
+       {
+         "type": "photo | album | collection",
+         "id": "string",
+         "accessLevel": "view | modify"
+       }
+     ],
+     "expiresAt": "datetime"
+   }
+   ```
+   - 响应格式：
+   ```json
+   {
+     "communicationId": "string",
+     "status": "sent | delivered | processed",
+     "response": {},
+     "timestamp": "datetime"
+   }
+   ```
+   - 状态码：
+     - 201: 通信创建成功
+     - 404: 目标代理未找到
+     - 403: 无权限与目标代理通信
+     - 400: 通信请求无效
+
+4. **更新代理配置 (PUT /api/agents/:userId/preferences)**
+   - 请求参数：
+     - `userId` (路径参数): 用户ID
+   - 请求体：
+   ```json
+   {
+     "notificationLevel": "high | medium | low",
+     "learningMode": "active | passive",
+     "privacySettings": {
+       "allowBehaviorTracking": "boolean",
+       "allowCrossUserLearning": "boolean",
+       "dataSharingLevel": "none | minimal | full"
+     },
+     "interfacePreferences": {
+       "suggestionsFrequency": "high | medium | low",
+       "autoOrganize": "boolean"
+     }
+   }
+   ```
+   - 响应格式：
+   ```json
+   {
+     "updated": "boolean",
+     "preferences": {},
+     "effectiveFrom": "datetime"
+   }
+   ```
+   - 状态码：
+     - 200: 成功更新
+     - 404: 用户代理未找到
+     - 400: 无效配置
+     - 403: 无权更新配置
+
+5. **代理学习反馈 (POST /api/agents/:userId/feedback)**
+   - 请求参数：
+     - `userId` (路径参数): 用户ID
+   - 请求体：
+   ```json
+   {
+     "feedbackType": "correction | reinforcement | rejection",
+     "targetAction": {
+       "type": "suggestion | response | organization",
+       "id": "string"
+     },
+     "feedback": "string",
+     "correctAction": {},
+     "severity": "minor | major | critical"
+   }
+   ```
+   - 响应格式：
+   ```json
+   {
+     "accepted": "boolean",
+     "impact": "immediate | nextInteraction | gradual",
+     "acknowledgement": "string"
+   }
+   ```
+   - 状态码：
+     - 200: 反馈已接受
+     - 404: 用户代理或目标动作未找到
+     - 400: 无效反馈
+     - 403: 无权提供反馈
 
 #### 2.1.5 搜索服务
 
 **职责**：
-- 照片索引
-- 文本搜索
-- 自然语言查询解析
+- 照片索引：创建和维护照片元数据的搜索索引
+- 文本搜索：提供高性能的文本和标签搜索功能
+- 自然语言查询解析：将用户自然语言查询转换为结构化搜索条件
+- 语义搜索：基于照片内容和上下文提供语义搜索能力
+- 搜索结果优化：按相关性排序并优化搜索结果
 
 **主要类**：
 ```
 - SearchService: 搜索的核心服务
+  - 处理搜索请求
+  - 整合各类搜索结果
+  - 应用搜索权限过滤
+  
 - IndexService: 索引管理服务
+  - 创建和更新搜索索引
+  - 管理索引生命周期
+  - 优化索引性能
+  
 - QueryParserService: 查询解析服务
+  - 解析文本查询
+  - 构建结构化查询对象
+  - 处理查询错误和模糊匹配
+  
+- NaturalLanguageProcessorService: 自然语言处理服务
+  - 分析自然语言查询意图
+  - 提取查询中的实体和关系
+  - 协调与AI服务的交互
+
+- SearchOptimizationService: 搜索优化服务
+  - 应用相关性排序算法
+  - 个性化搜索结果
+  - 实现搜索结果聚类和分面
+
 - SearchRepository: 搜索数据访问层
+  - 与搜索引擎交互
+  - 管理搜索统计和历史
+  
 - SearchController: 搜索API控制器
+  - 处理搜索相关的HTTP请求
+  - 实现搜索API端点
+  - 管理搜索结果分页和格式化
 ```
 
 **关键算法**：
-- 全文搜索
-- 语义搜索
-- 查询优化
+- 全文搜索：使用倒排索引实现高效文本搜索
+- 语义搜索：基于向量嵌入的相似度计算
+- 查询优化：重写和扩展查询以提高召回率
+- 相关性排序：多因素加权排序算法
+- 个性化搜索：基于用户历史和偏好调整搜索结果
+
+**API接口设计**：
+
+1. **搜索照片 (POST /api/search)**
+   - 请求体：
+   ```json
+   {
+     "query": {
+       "text": "string",
+       "tags": ["string"],
+       "dateRange": {
+         "start": "datetime",
+         "end": "datetime"
+       },
+       "location": {
+         "latitude": "number",
+         "longitude": "number",
+         "radius": "number"
+       },
+       "metadata": {},
+       "quality": "high | medium | low",
+       "people": ["string"]
+     },
+     "pagination": {
+       "page": "number",
+       "pageSize": "number"
+     },
+     "sort": {
+       "field": "date | relevance | quality",
+       "order": "asc | desc"
+     },
+     "filters": {}
+   }
+   ```
+   - 响应格式：
+   ```json
+   {
+     "results": [
+       {
+         "photoId": "string",
+         "thumbnail": "string",
+         "title": "string",
+         "createdAt": "datetime",
+         "relevanceScore": "number",
+         "matchedTags": ["string"],
+         "description": "string"
+       }
+     ],
+     "pagination": {
+       "currentPage": "number",
+       "totalPages": "number",
+       "totalResults": "number"
+     },
+     "facets": {
+       "tags": [{"tag": "string", "count": "number"}],
+       "dates": [{"range": "string", "count": "number"}],
+       "locations": [{"name": "string", "count": "number"}]
+     }
+   }
+   ```
+   - 状态码：
+     - 200: 成功
+     - 400: 无效查询
+     - 403: 无权执行搜索
+
+2. **自然语言搜索 (POST /api/search/natural)**
+   - 请求体：
+   ```json
+   {
+     "query": "string",
+     "context": {
+       "recentSearches": ["string"],
+       "currentView": "string"
+     },
+     "pagination": {
+       "page": "number",
+       "pageSize": "number"
+     },
+     "preferences": {
+       "interpretationLevel": "strict | relaxed",
+       "includeRelated": "boolean"
+     }
+   }
+   ```
+   - 响应格式：
+   ```json
+   {
+     "interpretedQuery": {
+       "text": "string",
+       "structuredQuery": {}, 
+       "confidence": "number"
+     },
+     "results": [
+       {
+         "photoId": "string",
+         "thumbnail": "string",
+         "title": "string",
+         "createdAt": "datetime",
+         "relevanceScore": "number",
+         "matchedCriteria": "string",
+         "description": "string"
+       }
+     ],
+     "pagination": {
+       "currentPage": "number",
+       "totalPages": "number",
+       "totalResults": "number"
+     },
+     "suggestions": {
+       "refinements": ["string"],
+       "relatedQueries": ["string"]
+     }
+   }
+   ```
+   - 状态码：
+     - 200: 成功
+     - 400: 无效查询
+     - 403: 无权执行搜索
+
+3. **获取搜索建议 (GET /api/search/suggestions)**
+   - 请求参数：
+     - `query` (查询参数): 部分搜索词
+     - `limit` (查询参数): 返回结果数量上限
+     - `types` (查询参数): 建议类型（如"tags,terms,phrases"）
+   - 响应格式：
+   ```json
+   {
+     "suggestions": [
+       {
+         "text": "string",
+         "type": "tag | term | phrase | recent",
+         "count": "number",
+         "highlighted": "string"
+       }
+     ],
+     "popularSearches": ["string"],
+     "personalizedSuggestions": ["string"]
+   }
+   ```
+   - 状态码：
+     - 200: 成功
+     - 400: 无效请求
+
+4. **获取搜索历史 (GET /api/search/history)**
+   - 请求参数：
+     - `limit` (查询参数): 返回结果数量上限
+     - `offset` (查询参数): 结果偏移量
+   - 响应格式：
+   ```json
+   {
+     "searches": [
+       {
+         "id": "string",
+         "query": "string",
+         "timestamp": "datetime",
+         "resultCount": "number",
+         "clickedResults": [
+           {
+             "photoId": "string",
+             "position": "number"
+           }
+         ]
+       }
+     ],
+     "pagination": {
+       "limit": "number",
+       "offset": "number",
+       "total": "number"
+     }
+   }
+   ```
+   - 状态码：
+     - 200: 成功
+     - 403: 无权访问历史记录
+
+5. **类似照片搜索 (POST /api/search/similar/:photoId)**
+   - 请求参数：
+     - `photoId` (路径参数): 作为参考的照片ID
+   - 请求体：
+   ```json
+   {
+     "similarityFactors": {
+       "content": "number",
+       "metadata": "number",
+       "visual": "number",
+       "semantic": "number"
+     },
+     "limit": "number",
+     "excludeSameDay": "boolean",
+     "excludeSameAlbum": "boolean"
+   }
+   ```
+   - 响应格式：
+   ```json
+   {
+     "results": [
+       {
+         "photoId": "string",
+         "thumbnail": "string",
+         "similarity": "number",
+         "similarityFactors": {
+           "content": "number",
+           "metadata": "number",
+           "visual": "number",
+           "semantic": "number"
+         }
+       }
+     ]
+   }
+   ```
+   - 状态码：
+     - 200: 成功
+     - 404: 参考照片未找到
+     - 403: 无权访问参考照片
 
 ### 2.2 前端组件
 
@@ -828,17 +1264,339 @@ interface AIService {
 - `GET /api/agents/:userId` - 获取用户代理
 - `POST /api/agents/:userId/query` - 向代理发送查询
 - `POST /api/agents/:userId/communicate` - 代理间通信
+- `PUT /api/agents/:userId/preferences` - 更新代理配置
+- `POST /api/agents/:userId/feedback` - 代理学习反馈
 
 #### 搜索API
 
 - `POST /api/search` - 搜索照片
 - `POST /api/search/natural` - 自然语言搜索
+- `GET /api/search/suggestions` - 获取搜索建议
+- `GET /api/search/history` - 获取搜索历史
+- `POST /api/search/similar/:photoId` - 类似照片搜索
+
+详细API规格：
+
+1. **搜索照片 (POST /api/search)**
+   - 请求体：
+   ```json
+   {
+     "query": {
+       "text": "string",
+       "tags": ["string"],
+       "dateRange": {
+         "start": "datetime",
+         "end": "datetime"
+       },
+       "location": {
+         "latitude": "number",
+         "longitude": "number",
+         "radius": "number"
+       },
+       "metadata": {},
+       "quality": "high | medium | low",
+       "people": ["string"]
+     },
+     "pagination": {
+       "page": "number",
+       "pageSize": "number"
+     },
+     "sort": {
+       "field": "date | relevance | quality",
+       "order": "asc | desc"
+     },
+     "filters": {}
+   }
+   ```
+   - 响应格式：
+   ```json
+   {
+     "results": [
+       {
+         "photoId": "string",
+         "thumbnail": "string",
+         "title": "string",
+         "createdAt": "datetime",
+         "relevanceScore": "number",
+         "matchedTags": ["string"],
+         "description": "string"
+       }
+     ],
+     "pagination": {
+       "currentPage": "number",
+       "totalPages": "number",
+       "totalResults": "number"
+     },
+     "facets": {
+       "tags": [{"tag": "string", "count": "number"}],
+       "dates": [{"range": "string", "count": "number"}],
+       "locations": [{"name": "string", "count": "number"}]
+     }
+   }
+   ```
+   - 状态码：
+     - 200: 成功
+     - 400: 无效查询
+     - 403: 无权执行搜索
+
+2. **自然语言搜索 (POST /api/search/natural)**
+   - 请求体：
+   ```json
+   {
+     "query": "string",
+     "context": {
+       "recentSearches": ["string"],
+       "currentView": "string"
+     },
+     "pagination": {
+       "page": "number",
+       "pageSize": "number"
+     },
+     "preferences": {
+       "interpretationLevel": "strict | relaxed",
+       "includeRelated": "boolean"
+     }
+   }
+   ```
+   - 响应格式：
+   ```json
+   {
+     "interpretedQuery": {
+       "text": "string",
+       "structuredQuery": {}, 
+       "confidence": "number"
+     },
+     "results": [
+       {
+         "photoId": "string",
+         "thumbnail": "string",
+         "title": "string",
+         "createdAt": "datetime",
+         "relevanceScore": "number",
+         "matchedCriteria": "string",
+         "description": "string"
+       }
+     ],
+     "pagination": {
+       "currentPage": "number",
+       "totalPages": "number",
+       "totalResults": "number"
+     },
+     "suggestions": {
+       "refinements": ["string"],
+       "relatedQueries": ["string"]
+     }
+   }
+   ```
+   - 状态码：
+     - 200: 成功
+     - 400: 无效查询
+     - 403: 无权执行搜索
+
+3. **获取搜索建议 (GET /api/search/suggestions)**
+   - 请求参数：
+     - `query` (查询参数): 部分搜索词
+     - `limit` (查询参数): 返回结果数量上限
+     - `types` (查询参数): 建议类型（如"tags,terms,phrases"）
+   - 响应格式：
+   ```json
+   {
+     "suggestions": [
+       {
+         "text": "string",
+         "type": "tag | term | phrase | recent",
+         "count": "number",
+         "highlighted": "string"
+       }
+     ],
+     "popularSearches": ["string"],
+     "personalizedSuggestions": ["string"]
+   }
+   ```
+   - 状态码：
+     - 200: 成功
+     - 400: 无效请求
+
+4. **获取搜索历史 (GET /api/search/history)**
+   - 请求参数：
+     - `limit` (查询参数): 返回结果数量上限
+     - `offset` (查询参数): 结果偏移量
+   - 响应格式：
+   ```json
+   {
+     "searches": [
+       {
+         "id": "string",
+         "query": "string",
+         "timestamp": "datetime",
+         "resultCount": "number",
+         "clickedResults": [
+           {
+             "photoId": "string",
+             "position": "number"
+           }
+         ]
+       }
+     ],
+     "pagination": {
+       "limit": "number",
+       "offset": "number",
+       "total": "number"
+     }
+   }
+   ```
+   - 状态码：
+     - 200: 成功
+     - 403: 无权访问历史记录
+
+5. **类似照片搜索 (POST /api/search/similar/:photoId)**
+   - 请求参数：
+     - `photoId` (路径参数): 作为参考的照片ID
+   - 请求体：
+   ```json
+   {
+     "similarityFactors": {
+       "content": "number",
+       "metadata": "number",
+       "visual": "number",
+       "semantic": "number"
+     },
+     "limit": "number",
+     "excludeSameDay": "boolean",
+     "excludeSameAlbum": "boolean"
+   }
+   ```
+   - 响应格式：
+   ```json
+   {
+     "results": [
+       {
+         "photoId": "string",
+         "thumbnail": "string",
+         "similarity": "number",
+         "similarityFactors": {
+           "content": "number",
+           "metadata": "number",
+           "visual": "number",
+           "semantic": "number"
+         }
+       }
+     ]
+   }
+   ```
+   - 状态码：
+     - 200: 成功
+     - 404: 参考照片未找到
+     - 403: 无权访问参考照片
 
 ### 4.2 WebSocket API
 
 - `/ws/notifications` - 实时通知
 - `/ws/upload-progress` - 上传进度
-- `/ws/agent-communication` - 代理通信
+
+详细API规格：
+
+1. **实时通知 (WebSocket /ws/notifications)**
+   - 描述：接收系统实时通知，如AI处理完成、照片分析结果更新等
+   - 连接参数：
+     - `Authorization`: Bearer token（必需）
+     - `userId`: 用户ID（必需）
+     - `types`: 通知类型过滤（可选，如"ai,share,system"）
+   - 发送消息格式（客户端到服务器）：
+   ```json
+   {
+     "type": "acknowledge",
+     "notificationIds": ["string"],
+     "action": "read | dismiss | respond"
+   }
+   ```
+   - 接收消息格式（服务器到客户端）：
+   ```json
+   {
+     "type": "ai_processing_complete | new_insights | share_notification | system_alert",
+     "timestamp": "datetime",
+     "notificationId": "string",
+     "data": {
+       "title": "string",
+       "message": "string",
+       "priority": "high | medium | low",
+       "resourceId": "string",
+       "resourceType": "photo | album | agent",
+       "action": {
+         "type": "view | dismiss | respond",
+         "url": "string"
+       },
+       "imageUrl": "string",
+       "additionalData": {}
+     },
+     "requiresAcknowledgement": "boolean",
+     "expiresAt": "datetime"
+   }
+   ```
+   - 客户端事件处理：
+     - `onConnect`: WebSocket连接建立时
+     - `onMessage`: 接收通知消息时
+     - `onError`: 连接或处理错误时
+     - `onClose`: 连接关闭时
+   - 重连策略：
+     - 初始重连延迟：1秒
+     - 最大重连延迟：30秒
+     - 重连次数上限：无限（指数退避）
+
+2. **上传进度 (WebSocket /ws/upload-progress)**
+   - 描述：接收照片上传进度的实时更新
+   - 连接参数：
+     - `Authorization`: Bearer token（必需）
+     - `uploadId`: 上传会话ID（必需）
+   - 发送消息格式（客户端到服务器）：
+   ```json
+   {
+     "type": "pause | resume | cancel",
+     "uploadId": "string"
+   }
+   ```
+   - 接收消息格式（服务器到客户端）：
+   ```json
+   {
+     "uploadId": "string",
+     "status": "in_progress | completed | failed | paused | canceled",
+     "progress": {
+       "totalFiles": "number",
+       "processedFiles": "number",
+       "currentFileIndex": "number",
+       "currentFileProgress": "number",
+       "currentFileName": "string",
+       "bytesUploaded": "number",
+       "totalBytes": "number",
+       "speed": "number",
+       "estimatedTimeRemaining": "number"
+     },
+     "results": [
+       {
+         "fileId": "string",
+         "fileName": "string",
+         "status": "success | error",
+         "photoId": "string",
+         "thumbnailUrl": "string",
+         "errorMessage": "string"
+       }
+     ],
+     "errorDetails": {
+       "code": "string",
+       "message": "string",
+       "retryable": "boolean"
+     }
+   }
+   ```
+   - 客户端事件处理：
+     - `onConnect`: WebSocket连接建立时
+     - `onMessage`: 接收进度更新时
+     - `onError`: 连接或处理错误时
+     - `onClose`: 连接关闭时，上传可能仍在后台继续
+   - 连接生命周期：
+     - 连接在上传完成或取消后自动关闭
+     - 上传超时：默认30分钟无进度更新后自动取消
+     - 丢失连接后的恢复机制：可通过相同uploadId重新连接获取当前状态
 
 ## 5. 用户界面设计
 
