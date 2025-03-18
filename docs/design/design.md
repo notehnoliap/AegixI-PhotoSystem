@@ -123,25 +123,185 @@
 #### 2.1.3 AI服务
 
 **职责**：
-- 照片内容分析
-- 描述生成
-- 自然语言处理
+- 照片内容分析和描述生成
+- 模型管理和切换逻辑
+- AI处理结果管理
 
 **主要类**：
 ```
 - AIService: AI功能的核心服务
-- ImageAnalysisService: 图像分析服务
-- DescriptionService: 描述生成服务
-- NLPService: 自然语言处理服务
-- ModelManager: AI模型管理
-- AIController: AI API控制器
+- LocalModelProcessor: 本地AI模型处理器
+- RemoteModelProcessor: 远程AI模型处理器
+- ModelSwitchManager: 模型切换管理器
+- ResultEvaluator: 分析结果评估服务
+- AIController: AI功能API控制器
 ```
 
 **关键算法**：
-- 图像识别和分类
-- 文本生成
-- 自然语言理解
-- 模型选择（本地/远程）
+- 图像识别和分类(使用轻量级CNN/MobileNet)
+- 照片质量评估(清晰度检测)
+- 结果合并和加权算法
+- 描述质量评估算法
+
+**模型切换机制设计**：
+
+1. **切换流程图**:
+```
++-------------------+     +----------------------+     +---------------------+
+| 照片上传到AI服务  |---->| 本地模型处理         |---->| 评估本地处理结果    |
++-------------------+     +----------------------+     +---------------------+
+                                                               |
+                                                               | 判断结果质量
+                                                               v
+                                                      +---------------------+
+                                                      | 结果是否满足阈值?   |
+                                                      +---------------------+
+                                                        /               \
+                                                       /                 \
+                                                 是   /                   \  否
+                                                     /                     \
+                              +---------------------+                       +----------------------+
+                              | 使用本地结果       |                       | 调用远程模型处理     |
+                              +---------------------+                       +----------------------+
+                                        |                                            |
+                                        |                                            |
+                                        v                                            v
+                                +---------------------+                    +----------------------+
+                                | 记录统计信息        |                    | 合并远程与本地结果   |
+                                +---------------------+                    +----------------------+
+                                        |                                            |
+                                        |                                            |
+                                        v                                            v
+                                +---------------------+                    +----------------------+
+                                | 返回结果给照片服务  |<-------------------| 记录切换统计信息     |
+                                +---------------------+                    +----------------------+
+```
+
+2. **核心切换逻辑伪代码**:
+```
+function processImage(image):
+    // 首先使用本地模型处理
+    localResult = localModelProcessor.process(image)
+    
+    // 评估本地结果质量
+    resultQuality = resultEvaluator.evaluate(localResult)
+    
+    // 记录统计信息
+    statistics.recordLocalProcessing(image.id, resultQuality)
+    
+    // 判断是否需要切换到远程模型
+    if resultQuality.confidence < CONFIDENCE_THRESHOLD || 
+       resultQuality.descriptionQuality < DESCRIPTION_QUALITY_THRESHOLD ||
+       localResult.tags.length < MIN_TAGS_THRESHOLD:
+        
+        // 使用远程模型进行处理
+        remoteResult = remoteModelProcessor.process(image)
+        
+        // 记录远程处理统计信息
+        statistics.recordRemoteProcessing(image.id, remoteResult)
+        
+        // 合并结果
+        finalResult = mergeResults(localResult, remoteResult)
+        
+        // 记录模型切换事件
+        statistics.recordModelSwitch(image.id, "local_to_remote", 
+                                    resultQuality, remoteResult.quality)
+        
+        return finalResult
+    else:
+        // 本地结果满足要求，直接使用
+        return localResult
+
+function mergeResults(localResult, remoteResult):
+    // 创建合并结果对象
+    mergedResult = new AnalysisResult()
+    
+    // 标签合并策略：优先使用远程模型标签，补充本地模型独有标签
+    mergedResult.tags = remoteResult.tags
+    
+    // 添加本地模型中独有的标签
+    for tag in localResult.tags:
+        if tag not in mergedResult.tags:
+            mergedResult.tags.add(tag)
+    
+    // 描述使用远程模型结果（通常更准确）
+    mergedResult.description = remoteResult.description
+    
+    // 合并元数据分析结果
+    mergedResult.metadata = {
+        ...localResult.metadata,
+        ...remoteResult.metadata
+    }
+    
+    // 记录结果来源
+    mergedResult.source = "hybrid"
+    mergedResult.confidence = Math.max(localResult.confidence, remoteResult.confidence)
+    
+    return mergedResult
+```
+
+3. **配置参数**:
+
+| 参数名 | 描述 | 默认值 | 可配置范围 |
+|-------|------|-------|-----------|
+| CONFIDENCE_THRESHOLD | 本地模型结果可信度阈值 | 0.75 | 0.5-0.95 |
+| DESCRIPTION_QUALITY_THRESHOLD | 描述质量阈值 | 0.7 | 0.5-0.9 |
+| MIN_TAGS_THRESHOLD | 最小标签数量 | 3 | 1-10 |
+| REMOTE_TIMEOUT | 远程模型调用超时(毫秒) | 5000 | 1000-10000 |
+| MODEL_SWITCH_MODE | 切换模式 | "auto" | "auto", "local_only", "remote_only", "hybrid_always" |
+
+4. **关键接口设计**:
+
+```typescript
+// 分析结果接口
+interface AnalysisResult {
+    id: string;
+    imageId: string;
+    tags: string[];
+    description: string;
+    confidence: number;
+    metadata: Record<string, any>;
+    source: "local" | "remote" | "hybrid";
+    processingTime: number;
+    timestamp: Date;
+}
+
+// AI服务接口
+interface AIService {
+    // 分析照片并返回结果
+    analyzePhoto(photoId: string, options?: AnalysisOptions): Promise<AnalysisResult>;
+    
+    // 获取模型切换统计信息
+    getSwitchingStatistics(timeRange?: {start: Date, end: Date}): Promise<SwitchingStatistics>;
+    
+    // 配置模型切换参数
+    configureModelSwitching(params: ModelSwitchingConfig): void;
+    
+    // 获取当前配置
+    getCurrentConfiguration(): ModelSwitchingConfig;
+    
+    // 手动触发远程模型重新分析
+    requestRemoteAnalysis(photoId: string): Promise<AnalysisResult>;
+}
+```
+
+5. **实现考虑**:
+
+- **性能优化**：本地模型使用轻量级架构(如MobileNetV2)，确保快速响应
+- **异步处理**：远程模型处理采用异步方式，不阻塞主流程
+- **缓存机制**：为常见照片类型的分析结果建立缓存，减少重复处理
+- **降级策略**：远程服务不可用时自动降级到仅使用本地模型
+- **详细日志**：记录每次模型切换事件，包括决策原因、时间和结果对比
+- **可视化界面**：为管理员提供模型切换统计和趋势可视化
+- **A/B测试支持**：支持不同切换策略的A/B测试，优化切换算法
+
+6. **关键指标监控**:
+
+- 本地模型使用率：`本地处理次数 / 总处理次数`
+- 远程模型调用率：`远程调用次数 / 总处理次数`
+- 平均处理时间：分别统计本地、远程和混合模式
+- 切换准确率：`正确切换决策次数 / 总切换次数`（通过后续用户反馈评估）
+- 资源使用情况：CPU、内存、网络带宽消耗
 
 #### 2.1.4 代理服务
 
@@ -245,20 +405,20 @@
 ### 2.3.1 照片上传与处理流程
 
 ```
-客户端                      API网关                  照片服务                存储服务               AI服务
-  |                           |                       |                       |                      |
-  |---上传照片请求----------->|                       |                       |                      |
-  |                           |---转发请求----------->|                       |                      |
-  |                           |                       |--存储原始照片-------->|                      |
-  |                           |                       |<--存储确认------------|                      |
-  |                           |                       |--生成缩略图---------->|                      |
-  |                           |                       |<--存储确认------------|                      |
-  |                           |                       |--提取元数据-----------|                      |
-  |                           |                       |--请求AI分析----------------------->|          |
-  |                           |                       |<--返回AI分析结果--------------------|          |
-  |                           |                       |--更新照片元数据------>|                      |
-  |<--上传完成通知------------|<--处理完成通知--------|                       |                      |
-  |                           |                       |                       |                      |
+客户端                    API网关                    照片服务                    存储服务                    AI服务
+  |                         |                         |                         |                         |
+  |---上传照片请求--------->|                         |                         |                         |
+  |                         |---转发请求------------->|                         |                         |
+  |                         |                         |---存储原始照片--------->|                         |
+  |                         |                         |<--存储确认--------------|                         |
+  |                         |                         |---生成缩略图----------->|                         |
+  |                         |                         |<--存储确认--------------|                         |
+  |                         |                         |---提取元数据------------|                         |
+  |                         |                         |---请求AI分析----------------------------->|       |
+  |                         |                         |<--返回AI分析结果-------------------------|       |
+  |                         |                         |---更新照片元数据-------->|                         |
+  |<--上传完成通知----------|<--处理完成通知----------|                         |                         |
+  |                         |                         |                         |                         |
 ```
 
 上图展示了照片从客户端上传到完成处理的完整流程：
@@ -273,16 +433,16 @@
 ### 2.3.2 自然语言搜索流程
 
 ```
-客户端                      API网关                  搜索服务                AI服务
-  |                           |                       |                       |
-  |---自然语言查询----------->|                       |                       |
-  |                           |---转发查询----------->|                       |
-  |                           |                       |--解析自然语言查询---->|
-  |                           |                       |<--返回结构化查询------|
-  |                           |                       |--执行数据库搜索-------|
-  |                           |                       |--整合搜索结果---------|
-  |<--返回搜索结果------------|<--返回结果------------|                       |
-  |                           |                       |                       |
+客户端                    API网关                    搜索服务                    AI服务
+  |                         |                         |                         |
+  |---自然语言查询--------->|                         |                         |
+  |                         |---转发查询------------->|                         |
+  |                         |                         |---解析自然语言查询----->|
+  |                         |                         |<--返回结构化查询--------|
+  |                         |                         |---执行数据库搜索--------|
+  |                         |                         |---整合搜索结果----------|
+  |<--返回搜索结果----------|<--返回结果--------------|                         |
+  |                         |                         |                         |
 ```
 
 该流程说明了自然语言搜索的处理过程：
