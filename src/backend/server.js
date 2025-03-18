@@ -5,6 +5,9 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 const fs = require('fs');
+const mongoose = require('mongoose');
+const http = require('http');
+const WebSocket = require('ws');
 
 // 创建Express应用
 const app = express();
@@ -32,11 +35,15 @@ if (!fs.existsSync(storageConfig.thumbnailPath)) {
 // 中间件
 app.use(helmet()); // 安全头
 app.use(cors(config.get('security.cors'))); // CORS
-app.use(express.json()); // JSON解析
-app.use(express.urlencoded({ extended: true })); // URL编码解析
+app.use(express.json({ limit: '50mb' })); // JSON解析
+app.use(express.urlencoded({ extended: true, limit: '50mb' })); // URL编码解析
 app.use(morgan(loggingConfig.format, { 
   stream: fs.createWriteStream(loggingConfig.file, { flags: 'a' }) 
 })); // 日志
+
+// 静态文件服务
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+app.use('/thumbnails', express.static(path.join(__dirname, '../thumbnails')));
 
 // API路由
 app.use(`${serverConfig.apiPrefix}/users`, require('./api/routes/users'));
@@ -53,29 +60,45 @@ if (featuresConfig.phase3.enabled) {
   app.use(`${serverConfig.apiPrefix}/agents`, require('./api/routes/agents'));
 }
 
-// 错误处理中间件
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({
-    error: {
-      message: '服务器内部错误',
-      details: process.env.NODE_ENV === 'development' ? err.message : undefined
-    }
+// 创建HTTP服务器
+const server = http.createServer(app);
+
+// 创建WebSocket服务器
+const wss = new WebSocket.Server({ server });
+
+// 初始化WebSocket处理程序
+const wsHandlers = require('./api/ws/websocket-handlers');
+wsHandlers.initializeWebSocketServer(wss);
+
+// 连接数据库
+mongoose.connect(config.mongoURI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+  useCreateIndex: true,
+  useFindAndModify: false
+})
+.then(() => {
+  console.log('MongoDB已连接');
+  // 启动服务器
+  server.listen(config.port, () => {
+    console.log(`服务器运行在端口: ${config.port}`);
   });
+})
+.catch(err => {
+  console.error('MongoDB连接错误:', err.message);
+  process.exit(1);
 });
 
-// 启动服务器
-const PORT = process.env.PORT || serverConfig.port;
-app.listen(PORT, () => {
-  console.log(`服务器运行在 http://${serverConfig.host}:${PORT}`);
-  console.log(`API前缀: ${serverConfig.apiPrefix}`);
-  console.log(`环境: ${config.get('system.environment')}`);
-  
-  // 显示启用的功能
-  console.log('启用的功能:');
-  console.log(`- 第一阶段功能: ${featuresConfig.phase1.enabled ? '是' : '否'}`);
-  console.log(`- 第二阶段功能: ${featuresConfig.phase2.enabled ? '是' : '否'}`);
-  console.log(`- 第三阶段功能: ${featuresConfig.phase3.enabled ? '是' : '否'}`);
+// 处理未捕获的异常
+process.on('uncaughtException', (err) => {
+  console.error('未捕获的异常:', err);
+  // 记录错误并进行适当的清理
 });
 
-module.exports = app; // 导出供测试使用
+// 处理未处理的Promise拒绝
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('未处理的Promise拒绝:', reason);
+  // 记录错误并进行适当的清理
+});
+
+module.exports = server;
